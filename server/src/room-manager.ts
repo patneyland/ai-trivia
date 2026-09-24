@@ -7,7 +7,7 @@ const roomTimers = new Map<string, NodeJS.Timeout>();
 const ROOM_CODE_LENGTH = 6;
 
 const DEFAULTS = {
-  questionCount: 20,
+  questionCount: 10,
   timerSeconds: 20,
 } as const;
 

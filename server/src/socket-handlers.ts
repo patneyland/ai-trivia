@@ -58,7 +58,7 @@ function emitRoom(io: Server, roomCode: string) {
 function scoreAnswer(
   isCorrect: boolean,
   timeMs: number,
-  timerSeconds: number
+  timerSeconds: number,
 ): number {
   if (!isCorrect) return 0;
   const maxMs = timerSeconds * 1000;
@@ -68,7 +68,7 @@ function scoreAnswer(
 }
 
 function revealCurrentQuestion(
-  room: NonNullable<ReturnType<typeof getRoomByCode>>
+  room: NonNullable<ReturnType<typeof getRoomByCode>>,
 ): void {
   clearTimer(room.code);
   const question = room.questions[room.currentQuestion];
@@ -82,7 +82,7 @@ function revealCurrentQuestion(
     const earned = scoreAnswer(
       submission.choice === question.answer,
       submission.timeMs,
-      room.timerSeconds
+      room.timerSeconds,
     );
     return { ...player, score: player.score + earned };
   });
@@ -92,7 +92,7 @@ function revealCurrentQuestion(
 
 function startCurrentQuestion(
   io: Server<ClientToServerEvents, ServerToClientEvents>,
-  room: NonNullable<ReturnType<typeof getRoomByCode>>
+  room: NonNullable<ReturnType<typeof getRoomByCode>>,
 ): boolean {
   if (!room.questions[room.currentQuestion]) {
     clearTimer(room.code);
@@ -114,7 +114,7 @@ function startCurrentQuestion(
 
 export function registerSocketHandlers(
   io: Server<ClientToServerEvents, ServerToClientEvents>,
-  socket: Socket<ClientToServerEvents, ServerToClientEvents>
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
 ) {
   socket.on("create_room", (payload) => {
     const parsed = CreateRoomSchema.safeParse(payload);
@@ -123,8 +123,13 @@ export function registerSocketHandlers(
       return;
     }
     const room = createRoom(socket.id);
+    if (parsed.data.questionCount !== undefined)
+      updateSettings(room, { questionCount: parsed.data.questionCount });
     socket.join(room.code);
-    socket.emit("room_joined", { room: publicRoom(room)!, playerId: socket.id });
+    socket.emit("room_joined", {
+      room: publicRoom(room)!,
+      playerId: socket.id,
+    });
   });
 
   socket.on("join_room", (payload) => {
@@ -152,7 +157,10 @@ export function registerSocketHandlers(
       return;
     }
     socket.join(code);
-    socket.emit("room_joined", { room: publicRoom(room)!, playerId: socket.id });
+    socket.emit("room_joined", {
+      room: publicRoom(room)!,
+      playerId: socket.id,
+    });
     emitRoom(io, code);
   });
 
@@ -199,6 +207,7 @@ export function registerSocketHandlers(
   socket.on("start_game", async () => {
     const room = getRoomForPlayer(socket.id);
     if (!room || room.hostId !== socket.id) return;
+    if (room.state !== "lobby" && room.state !== "collecting_interests") return;
     if (room.players.length === 0) {
       socket.emit("error", { message: "At least one player must join first." });
       return;
@@ -218,7 +227,7 @@ export function registerSocketHandlers(
         (progress) => {
           io.to(room.code).emit("generation_progress", progress);
         },
-        { roomCode: room.code }
+        { roomCode: room.code },
       );
       setRoomQuestions(room, questions);
       startCurrentQuestion(io, room);
@@ -234,28 +243,71 @@ export function registerSocketHandlers(
     }
   });
 
-  socket.on("submit_answer", (payload) => {
+  socket.on("submit_answer", (payload, acknowledge) => {
+    const reply = typeof acknowledge === "function" ? acknowledge : () => {};
+    const room = getRoomForPlayer(socket.id);
+    if (!room || !isPlayerInRoom(room, socket.id)) {
+      reply({
+        accepted: false,
+        message: "You are no longer in this game.",
+        canRetry: false,
+      });
+      return;
+    }
     const parsed = SubmitAnswerSchema.safeParse(payload);
     if (!parsed.success) {
-      socket.emit("error", { message: "Invalid answer submission." });
+      reply({
+        accepted: false,
+        message: "That answer could not be submitted.",
+        canRetry: false,
+      });
       return;
     }
-    const room = getRoomForPlayer(socket.id);
-    if (!room || room.state !== "playing") return;
-    if (!isPlayerInRoom(room, socket.id)) {
-      socket.emit("error", { message: "Only players can answer questions." });
+    if (
+      parsed.data.questionIndex !== room.currentQuestion ||
+      parsed.data.timerStartedAt !== room.timerStartedAt
+    ) {
+      reply({
+        accepted: false,
+        message: "This question has ended.",
+        canRetry: false,
+      });
       return;
     }
-
-    const key = String(room.currentQuestion);
-    if (room.answers[key]?.[socket.id]) return;
-    recordAnswer(room, room.currentQuestion, socket.id, parsed.data);
-
-    // Auto-reveal when all players have answered
-    if (allPlayersAnswered(room)) {
-      revealCurrentQuestion(room);
+    const existing = room.answers[String(room.currentQuestion)]?.[socket.id];
+    if (existing) {
+      reply({ accepted: true, choice: existing.choice });
+      return;
     }
-
+    if (
+      room.state !== "playing" ||
+      Date.now() >= room.timerStartedAt + room.timerSeconds * 1000
+    ) {
+      reply({
+        accepted: false,
+        message: "Time is up. Waiting for the answer.",
+        canRetry: false,
+      });
+      return;
+    }
+    if (
+      !room.questions[room.currentQuestion]?.options.includes(
+        parsed.data.choice,
+      )
+    ) {
+      reply({
+        accepted: false,
+        message: "Choose one of the answers shown.",
+        canRetry: true,
+      });
+      return;
+    }
+    recordAnswer(room, room.currentQuestion, socket.id, {
+      choice: parsed.data.choice,
+      timeMs: parsed.data.timeMs,
+    });
+    reply({ accepted: true, choice: parsed.data.choice });
+    if (allPlayersAnswered(room)) revealCurrentQuestion(room);
     emitRoom(io, room.code);
   });
 
@@ -295,7 +347,9 @@ export function registerSocketHandlers(
     const room = removePlayer(socket.id);
 
     if (wasHost && roomCode) {
-      io.to(roomCode).emit("error", { message: "Host disconnected. Room closed." });
+      io.to(roomCode).emit("error", {
+        message: "Host disconnected. Room closed.",
+      });
       io.in(roomCode).socketsLeave(roomCode);
       clearTimer(roomCode);
       return;

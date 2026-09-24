@@ -1,158 +1,137 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { AlertCircle, ArrowRight, Users } from "lucide-react";
 import { socket } from "../lib/socket";
-
-function normalizeCode(value: string) {
-  return value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6);
-}
-
-function formatCode(value: string) {
-  if (value.length <= 3) return value;
-  return `${value.slice(0, 3)}-${value.slice(3, 6)}`;
-}
+import { normalizeCode, formatCode } from "../lib/room-code";
 
 export function JoinRoom() {
   const [, navigate] = useLocation();
-  const initialCode = useMemo(() => {
-    const query = new URLSearchParams(window.location.search);
-    return normalizeCode(query.get("code") ?? "");
-  }, []);
-
-  const [roomCode, setRoomCode] = useState(initialCode);
-  const [username, setUsername] = useState("");
+  const [roomCode, setRoomCode] = useState(() =>
+    normalizeCode(
+      new URLSearchParams(window.location.search).get("code") ?? "",
+    ),
+  );
+  const [editingCode, setEditingCode] = useState(roomCode.length !== 6);
+  const [name, setName] = useState("");
   const [error, setError] = useState("");
-  const [awaitingJoin, setAwaitingJoin] = useState(false);
-  const awaitingJoinRef = useRef(false);
-
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   useEffect(() => {
-    const handleJoined = (payload: { room: { code: string } }) => {
-      if (!awaitingJoinRef.current) return;
-      awaitingJoinRef.current = false;
-      setAwaitingJoin(false);
-      navigate(`/room/${payload.room.code}`);
+    const joined = ({ room }: { room: { code: string } }) => {
+      if (!pendingRef.current) return;
+      pendingRef.current = false;
+      navigate(`/room/${room.code}`);
     };
-
-    const handleError = (payload: { message: string }) => {
-      if (!awaitingJoinRef.current) return;
-      awaitingJoinRef.current = false;
-      setAwaitingJoin(false);
-      setError(payload.message);
+    const failed = ({ message }: { message: string }) => {
+      if (!pendingRef.current) return;
+      pendingRef.current = false;
+      setPending(false);
+      setError(message);
     };
-
-    socket.on("room_joined", handleJoined);
-    socket.on("error", handleError);
-
+    const disconnected = () =>
+      failed({ message: "Connection lost. Please try again when connected." });
+    socket.on("room_joined", joined);
+    socket.on("error", failed);
+    socket.on("disconnect", disconnected);
+    socket.on("connect_error", disconnected);
     return () => {
-      socket.off("room_joined", handleJoined);
-      socket.off("error", handleError);
-      awaitingJoinRef.current = false;
+      socket.off("room_joined", joined);
+      socket.off("error", failed);
+      socket.off("disconnect", disconnected);
+      socket.off("connect_error", disconnected);
     };
   }, [navigate]);
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  function join(event: FormEvent) {
     event.preventDefault();
+    if (pendingRef.current) return;
+    if (roomCode.length !== 6) {
+      setError("Enter a six-character room code.");
+      setEditingCode(true);
+      return;
+    }
+    if (!name.trim()) {
+      setError("Enter your name to join.");
+      return;
+    }
+    if (!socket.connected) {
+      setError("Connecting to the game. Please try again in a moment.");
+      return;
+    }
     setError("");
-
-    const code = normalizeCode(roomCode);
-    const name = username.trim();
-
-    if (code.length !== 6) {
-      setError("Please enter a valid room code");
-      return;
-    }
-
-    if (!name) {
-      setError("Please enter your name");
-      return;
-    }
-
-    awaitingJoinRef.current = true;
-    setAwaitingJoin(true);
-    socket.emit("join_room", { code, playerName: name });
-  };
-
+    pendingRef.current = true;
+    setPending(true);
+    socket.emit("join_room", { code: roomCode, playerName: name.trim() });
+  }
   return (
-    <div className="h-screen overflow-hidden bg-gray-50 p-4">
-      <div className="mx-auto flex h-full w-full max-w-lg items-center justify-center">
-        <div className="w-full space-y-3">
-          <div className="space-y-1 text-center">
-            <div className="flex justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg border-[3px] border-gray-800">
-                <Users className="h-6 w-6" />
-              </div>
+    <main className="setup-page">
+      <div className="setup-content">
+        <header className="space-y-3">
+          <h1 className="text-3xl font-bold">Join the game</h1>
+        </header>
+        <form onSubmit={join} noValidate className="space-y-5">
+          {editingCode ? (
+            <div className="space-y-2">
+              <label htmlFor="roomCode" className="block text-sm font-medium">
+                Room code
+              </label>
+              <input
+                id="roomCode"
+                className="field text-center text-xl font-bold tracking-widest"
+                value={formatCode(roomCode)}
+                onChange={(e) => setRoomCode(normalizeCode(e.target.value))}
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                placeholder="ABC-DEF"
+                disabled={pending}
+              />
             </div>
-            <h1 className="text-2xl font-bold">Join Room</h1>
-            <p className="text-sm text-gray-600">Enter the room code to join</p>
+          ) : (
+            <div className="flex items-center justify-between">
+              <p className="text-gray-600">
+                Room{" "}
+                <strong className="text-gray-900">
+                  {formatCode(roomCode)}
+                </strong>
+              </p>
+              <button
+                type="button"
+                className="quiet-action"
+                onClick={() => setEditingCode(true)}
+                disabled={pending}
+              >
+                Change
+              </button>
+            </div>
+          )}
+          <div className="space-y-2">
+            <label htmlFor="name" className="block text-sm font-medium">
+              Your name
+            </label>
+            <input
+              id="name"
+              className="field"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={24}
+              autoComplete="given-name"
+              autoFocus={!editingCode}
+              placeholder="What should we call you?"
+              disabled={pending}
+            />
           </div>
-
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div className="space-y-4 rounded-lg border-[3px] border-gray-800 bg-white p-4">
-              <div className="space-y-2">
-                <label htmlFor="roomCode" className="block text-sm font-medium">
-                  Room Code
-                </label>
-                <input
-                  id="roomCode"
-                  type="text"
-                  value={formatCode(roomCode)}
-                  onChange={(event) => setRoomCode(normalizeCode(event.target.value))}
-                  placeholder="ABC-DEF"
-                  maxLength={7}
-                  required
-                  className="w-full rounded-lg border-2 border-gray-800 px-3 py-2.5 text-center text-xl font-bold tracking-widest focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-                />
-              </div>
-
-              <div className="h-px bg-gray-800" />
-
-              <div className="space-y-2">
-                <label htmlFor="username" className="block text-sm font-medium">
-                  Your Name
-                </label>
-                <input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  placeholder="e.g., John Doe"
-                  required
-                  className="w-full rounded-lg border-2 border-gray-800 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-                />
-              </div>
-
-              {error && (
-                <div className="flex items-start gap-2 rounded-lg border-2 border-red-600 bg-red-50 p-3">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-                  <p className="text-sm text-red-700">{error}</p>
-                </div>
-              )}
-
-              <div className="rounded-lg border-2 border-gray-800 bg-gray-50 p-3 text-xs">
-                <span className="font-medium">Tip:</span> Get the room code from
-                the host who created the trivia session
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={awaitingJoin}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-gray-800 px-6 py-3 font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {awaitingJoin ? "Joining..." : "Join Room"}
-              <ArrowRight className="h-5 w-5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => navigate("/")}
-              className="w-full rounded-lg border-2 border-gray-800 bg-white px-6 py-2.5 text-sm font-medium transition-colors hover:bg-gray-50"
-            >
-              Back
-            </button>
-          </form>
-        </div>
+          {error && (
+            <p role="alert" className="text-sm text-red-700">
+              {error}
+            </p>
+          )}
+          <button className="primary-action w-full" disabled={pending}>
+            {pending ? "Joining…" : "Join game"}
+          </button>
+        </form>
+        <button onClick={() => navigate("/")} className="quiet-action w-full">
+          Back
+        </button>
       </div>
-    </div>
+    </main>
   );
 }

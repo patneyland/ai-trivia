@@ -11,3 +11,40 @@
     color: #111827;
   }
 }
+
+@layer base {
+  button,
+  input,
+  summary {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-800 focus-visible:ring-offset-4;
+  }
+  button {
+    @apply disabled:cursor-not-allowed;
+  }
+}
+@layer components {
+  .setup-page {
+    @apply min-h-[100dvh] bg-gray-50 px-6 py-10 flex items-center justify-center;
+  }
+  .setup-content {
+    @apply w-full max-w-sm space-y-8;
+  }
+  .field {
+    @apply min-h-12 w-full rounded-lg border-2 border-gray-800 bg-white px-3 py-3 disabled:opacity-60;
+  }
+  .primary-action {
+    @apply min-h-12 rounded-lg bg-gray-800 px-6 py-3 font-medium text-white transition-colors hover:bg-gray-700 disabled:opacity-50;
+  }
+  .quiet-action {
+    @apply min-h-11 rounded px-2 py-2 text-sm font-medium text-gray-600 underline decoration-gray-300 underline-offset-4 hover:text-gray-900;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

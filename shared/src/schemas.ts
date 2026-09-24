@@ -43,13 +43,14 @@ export const RoomSchema = z.object({
       z.object({
         choice: z.string(),
         timeMs: z.number(),
-      })
-    )
+      }),
+    ),
   ),
 });
 
 export const CreateRoomSchema = z.object({
   hostName: z.string().min(1).max(24).optional(),
+  questionCount: z.number().int().min(5).max(50).optional(),
 });
 
 export const JoinRoomSchema = z.object({
@@ -63,10 +64,12 @@ export const UpdateSettingsSchema = z.object({
 });
 
 export const SubmitInterestsSchema = z.object({
-  interests: z.array(z.string().min(1)).min(1).max(5),
+  interests: z.array(z.string().trim().min(1)).min(1).max(5),
 });
 
 export const SubmitAnswerSchema = z.object({
+  questionIndex: z.number().int().nonnegative(),
+  timerStartedAt: z.number().positive(),
   choice: z.string(),
   timeMs: z.number().nonnegative(),
 });
